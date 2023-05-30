@@ -4,5 +4,7 @@
 # @Description :
 import logging
 
+logging.basicConfig(format='%(asctime)s.%(msecs)03d [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s',
+                    datefmt='## %Y-%m-%d %H:%M:%S')
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)

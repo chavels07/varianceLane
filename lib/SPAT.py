@@ -87,14 +87,20 @@ class Turn(Enum):
         else:
             return None
 
-    def decompose(self) -> Tuple[int, List['Turn']]:
+    def decompose(self) -> Tuple[int, List['Turn'], Optional[List[float]]]:
+        """
+        将多转向放行车道进行拆解
+        Returns: 拆解车道数量, 车道组合, 车辆分配比例(需要由实测转向比例确定, None则均分)
+
+        """
         if self is self.RIGHT_TURN:
-            return 2, [self.RIGHT, self.TURN]
+            return 2, [self.RIGHT, self.TURN], [1, 1]
         elif self is self.RIGHT_STRAIGHT:
-            return 2, [self.RIGHT, self.STRAIGHT]
+            return 2, [self.RIGHT, self.STRAIGHT], None
         elif self is self.LEFT_STRAIGHT:
-            return 2, [self.LEFT, self.STRAIGHT]
-        return 1, [self]
+            return 2, [self.LEFT, self.STRAIGHT], None  # 对于直左共用车道来说, 左转流量取车道所有流量
+        return 1, [self], None
+
 
 # 暂时不需要direction
 class Direction(Enum):
@@ -108,7 +114,7 @@ class Direction(Enum):
         return Direction((self.value + 1) % 4 + 1)
 
 
-@dataclass(frozen=Turn)
+@dataclass(frozen=True)
 class Movement:
     direction: Direction
     turn: Turn
