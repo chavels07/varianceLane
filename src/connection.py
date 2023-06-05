@@ -39,7 +39,7 @@ class Connection:
     def __init__(self):
         self.client = mqtt.Client()
 
-    def connect(self, tf_handle=Callable, queue_handle=Callable):
+    def connect(self, tf_handle: Callable, queue_handle: Callable):
         client = self.client
         client.on_connect = on_connect
         client.on_message = partial(on_message, tf_handle=tf_handle, queue_handle=queue_handle)
@@ -53,3 +53,6 @@ class Connection:
     def publish_vms(self, msg: dict):
         self.client.publish(Config.vms_up_topic, json.dumps(msg))
         print('publish vms successfully')
+
+    def loop_start(self):
+        self.client.loop_forever()

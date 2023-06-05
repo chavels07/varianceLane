@@ -5,6 +5,8 @@
 from utils.config import load_json
 load_json('setting.json')
 
+from functools import partial
+
 from lib.SPAT import Movement, Direction, Turn
 from lib.state import TurnDemand, DayLanePlan, PlanDuration
 from src.lane_change import (StaticIntersectionController, DynamicIntersectionController, VarianceLane, LaneAllocation,
@@ -20,8 +22,7 @@ RIGHT_SAT_RATE = 1400
 
 # TODO: East变化太多
 if __name__ == '__main__':
-    connection = Connection()
-    connection.connect()
+
     LANE_MOVEMENT_MAPPING = {
         16: Movement(Direction.EAST, Turn.STRAIGHT),
         17: Movement(Direction.EAST, Turn.STRAIGHT),
@@ -215,12 +216,15 @@ if __name__ == '__main__':
                                            {'weekdays': [4, 6, 7, 10, 11, 12], 'weekends': [8, 9], 'festivals': [5]}, 1,
                                            [16, 17, 18, 19, 30, 31, 32, 33])
 
+    connection = Connection()
     controller = DynamicIntersectionController(variance_lanes=[v_lane_east, v_lane_west],
                                                lane_movement_mapping=LANE_MOVEMENT_MAPPING,
                                                update_interval_sec=1800,
                                                history_lane_flow=assemble_avg_flow,
                                                history_lane_movement_mapping=day_lane_plan,
                                                connection=connection)
+    connection.connect(tf_handle=partial(controller.update_from_traffic_flow, publish=True),
+                       queue_handle=controller.update_from_queue)
 
     tf_data_path = 'data/TrafficFlow_Logs3.log'
     for stat in read_file(tf_data_path):

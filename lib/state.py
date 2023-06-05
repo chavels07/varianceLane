@@ -2,9 +2,10 @@
 # @Time        : 2023/4/6 20:21
 # @File        : state.py
 # @Description :
+from collections import namedtuple
+from dataclasses import dataclass
 from typing import List, Dict, Optional, Iterable
 
-from dataclasses import dataclass
 from lib.SPAT import Turn, Movement
 
 PRIORITY_FACTOR = {
@@ -36,6 +37,12 @@ class PlanDuration:
     movement_allocation: Dict[int, Movement]
     hour_start: float
     hour_end: float
+
+
+@dataclass
+class QueueData:
+    queue_num: float
+    queue_length: float
 
 
 class DayLanePlan:
@@ -86,6 +93,32 @@ class LaneFlowStorage:
             lane_info.append(record)
         return lane_info
 
+
+class LaneFlowQueueStorage(LaneFlowStorage):
+    def __init__(self, lanes: Iterable[int]):
+        super().__init__(lanes)
+        self.queues: Dict[int, QueueData] = {lane: QueueData(0, 0) for lane in lanes}
+
+    def record_queue(self, lane_id: int, queues: List[QueueData]):
+        if not len(queues):
+            return None
+        queue_avg_num = sum(q.queue_num for q in queues) / len(queues)
+        queue_avg_length = sum(q.queue_length for q in queues) / len(queues)
+        self.queues[lane_id].queue_num = queue_avg_num
+        self.queues[lane_id].queue_length = queue_avg_length
+
+    def flow_msg_decorate(self):
+        lane_info = []
+        for lane_id, flow in self.flows.items():
+            queue_data = self.queues[lane_id]
+            record = {
+                'laneId': lane_id,
+                'flow': round(flow),
+                'queueLength': round(queue_data.queue_length),
+                'queueNum': round(queue_data.queue_num)
+            }
+            lane_info.append(record)
+        return lane_info
 
 # @dataclass
 # class PhaseDemand:

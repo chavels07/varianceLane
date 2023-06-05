@@ -4,11 +4,11 @@
 # @Description :
 import time
 
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from typing import Tuple, List, Dict, Union, Optional, Callable
 
 from lib.SPAT import Turn, Direction, Movement
-from lib.state import TurnDemand, PlanDuration, DayLanePlan, LaneFlowStorage
+from lib.state import TurnDemand, PlanDuration, DayLanePlan, LaneFlowQueueStorage, QueueData
 from lib.tool import logger
 from src.connection import Connection
 from utils.data_load import HistoryLaneFlow
@@ -221,7 +221,6 @@ def get_movement_sorted_lane(lane_movement_mapping: Dict[int, Movement]) -> Dict
         movement_sorted_lanes[movement].append(lane_id)
     return movement_sorted_lanes
 
-
 class IntersectionController:
     def __init__(self, variance_lanes: List[VarianceLane], lane_movement_mapping: Dict[int, Movement],
                  update_interval_sec: float):
@@ -229,6 +228,7 @@ class IntersectionController:
         self.lane_movement_mapping = lane_movement_mapping
         self.movement_sorted_lanes = get_movement_sorted_lane(lane_movement_mapping)
         self.traffic_data_cache = {lane_id: [] for lane_id in lane_movement_mapping.keys()}
+        self.queue_data_cache = {lane_id: [] for lane_id in lane_movement_mapping.keys()}
         self.update_interval_sec = update_interval_sec
         self.last_update_time = None
 
@@ -281,6 +281,17 @@ class IntersectionController:
             self.variance_lane_change_decide()
             self.last_update_time = detect_start_time
             print(time.asctime(time.gmtime(detect_start_time)))
+
+    def update_from_queue(self, queue_data: dict):
+        for lane in queue_data['lanes']:
+            lane_id = lane['lane_no']
+            if lane_id not in self.lane_movement_mapping:
+                continue
+
+            queue_avg = lane['queue']
+            queue_num = queue_avg['queue_num']
+            queue_length = queue_avg['queue_length']
+            self.queue_data_cache[lane_id].append(QueueData(queue_num, queue_length))
 
 
 class StaticIntersectionController(IntersectionController):
@@ -341,7 +352,7 @@ class DynamicIntersectionController(IntersectionController):
         self.history_lane_plan = history_lane_movement_mapping
         self.history_lane_flow = history_lane_flow
         self.plan_applied = plan_applied  # TODO: 如果执行方案可直接影响车道功能, 将不使用预设车道方案而使用内部存储方案
-        self.lane_flow_storage = LaneFlowStorage(lane_movement_mapping.keys())
+        self.lane_flow_storage = LaneFlowQueueStorage(lane_movement_mapping.keys())
         self.connection = connection
 
     def calculate_movement_avg_flow_stat_predicted(self, movement_sorted_lanes: Dict[Movement, List[int]], **kwargs):
@@ -368,7 +379,13 @@ class DynamicIntersectionController(IntersectionController):
                                                                                                  **kwargs):
             self.variance_lanes[movement.direction].update_demand(movement.turn, movement_total_avg_flow, 0)
 
+    def update_all_lane_queue(self):
+        for lane_id, queue_cache in self.queue_data_cache.items():
+            self.lane_flow_storage.record_queue(lane_id, queue_cache)
+            queue_cache.clear()
+
     def update_from_traffic_flow(self, tf_data: dict, publish: bool = False):
+        tf_data = tf_data['statistics'][0]
         detect_start_time = tf_data['cycle_start_time']
         if self.last_update_time is None:
             self.last_update_time = detect_start_time
@@ -388,6 +405,10 @@ class DynamicIntersectionController(IntersectionController):
             plan_duration = self.history_lane_plan.search_plan(current_hour)
             self.update_all_movement_demand(get_movement_sorted_lane(plan_duration.movement_allocation),
                                             current_hour=current_hour, date_type=self.get_date_type(current_time))
+
+            # queue数据没有时间戳信息, 需要在此处进行更新
+            self.update_all_lane_queue()
+
             change_flag = self.variance_lane_change_decide()
             self.last_update_time = detect_start_time
             print(time.asctime(current_time), end='\n\n')
@@ -416,7 +437,7 @@ class DynamicIntersectionController(IntersectionController):
         msg = {
             'timestamp': int(time.time()),
             'duration': self.update_interval_sec,
-            'laneAllocation': lane_allocation
+            'laneAllocations': lane_allocation
         }
         return msg
 
