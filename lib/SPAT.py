@@ -94,12 +94,25 @@ class Turn(Enum):
 
         """
         if self is self.RIGHT_TURN:
-            return 2, [self.RIGHT, self.TURN], [1, 1]
+            return 2, [self.RIGHT, self.TURN], [0.7, 0.3]
         elif self is self.RIGHT_STRAIGHT:
             return 2, [self.RIGHT, self.STRAIGHT], None
         elif self is self.LEFT_STRAIGHT:
             return 2, [self.LEFT, self.STRAIGHT], None  # 对于直左共用车道来说, 左转流量取车道所有流量
         return 1, [self], None
+
+    @property
+    def indicator_num(self) -> int:
+        TURN_NUM_MAPPING = {
+            Turn.STRAIGHT: 1,
+            Turn.LEFT: 2,
+            Turn.RIGHT: 3,
+            Turn.TURN: 4,
+            Turn.LEFT_STRAIGHT: 5,
+            Turn.RIGHT_STRAIGHT: 7,
+            Turn.RIGHT_TURN: 8
+        }
+        return TURN_NUM_MAPPING[self]
 
 
 # 暂时不需要direction

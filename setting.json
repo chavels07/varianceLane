@@ -1,0 +1,8 @@
+{
+	"mqtt_ip": "127.0.0.1",
+	"mqtt_port": 1883,
+	"tf_topic": "MECUpload/changzhonglu/TrafficFlow",
+	"queue_topic": "MECUpload/changzhonglu/QueueLength",
+    "tf_up_topic": "dataup/traffic",
+    "vms_up_topic": "dataup/vms"
+}
