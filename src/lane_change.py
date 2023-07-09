@@ -13,7 +13,8 @@ from lib.tool import logger
 from src.connection import Connection
 from utils.data_load import HistoryLaneFlow
 
-ABSOLUTE_SATURATION_DIFF = 0.5
+ABSOLUTE_SATURATION_DIFF = 0.4
+RECOVER_SATURATION_DIFF = 0.5
 
 
 class VMS:
@@ -126,7 +127,7 @@ class VarianceLane:
             self.demand[decompose_turns[0]].update(flow_hour, queue_length)
 
     def vsm_adjust(self):
-        MAJOR_EXTREME_THRESHOLD = 0.9
+        MAJOR_EXTREME_THRESHOLD = 1.0
         vms = self.vms_device
         major_demand = self.demand[vms.major_state]
         minor_demand = self.demand[vms.minor_state]
@@ -159,12 +160,13 @@ class VarianceLane:
                                                                      adjust_available_lane[major_turn])
                 minor_adjust_sat_rate = minor_demand.saturation_rate(minor_max_green_split,
                                                                      adjust_available_lane[minor_turn])
-                # 当调整过后主流向饱和度过高, 或主流向饱和度大于次流向一定水平, 则不变换
-                if major_adjust_sat_rate > major_threshold or minor_adjust_sat_rate > major_adjust_sat_rate + 0.2:
+                #  或主流向饱和度大于次流向一定水平, 且已经超过接受阈值, 则不变换
+                if major_adjust_sat_rate + 0.2 > minor_adjust_sat_rate and major_adjust_sat_rate > major_threshold:
                     logger.info(output_string + f'车道方案改变后,主转向{major_turn}饱和度:{major_adjust_sat_rate}, '
+                                                f'次转向{minor_turn}饱和度:{minor_adjust_sat_rate}'
                                                 f'超过饱和度阈值{major_threshold}, 不改变车道功能分配方案')
                     return False
-                logger.info(output_string + str(major_adjust_sat_rate) + '  ' + str(minor_adjust_sat_rate))
+                print(output_string + str(major_adjust_sat_rate) + '  ' + str(minor_adjust_sat_rate))
                 # do something here
                 vms.change_state()
                 return True
@@ -182,25 +184,22 @@ class VarianceLane:
                                                                          available_lane[minor_turn])
             print(self.direction, major_current_saturation_rate, minor_current_saturation_rate,
                   major_current_saturation_rate - minor_current_saturation_rate)
-            # major流向大于极限阈值后立刻切换, 不管minor流向的饱和度
-            if major_current_saturation_rate > MAJOR_EXTREME_THRESHOLD:
-                logger.info(f'进口道{self.direction.name}转向{major_turn}饱和度:{major_current_saturation_rate}, '
-                            f'饱和度阈值:{MAJOR_EXTREME_THRESHOLD}, 车道功能变换')
-                vms.change_state()
-                return True
 
             # 优先保证major流向
-            if major_current_saturation_rate - minor_current_saturation_rate > ABSOLUTE_SATURATION_DIFF:
+            if major_current_saturation_rate > MAJOR_EXTREME_THRESHOLD or \
+                    major_current_saturation_rate - minor_current_saturation_rate > ABSOLUTE_SATURATION_DIFF:
                 output_string = f'进口道{self.direction.name}主要转向{major_turn}饱和度:{major_current_saturation_rate}, ' \
                                 f'次要转向{minor_turn}饱和度:{minor_current_saturation_rate}, 车道功能变换  '
                 adjust_available_lane = self.lane_allocation.ensure_turn_allocation(major_turn, minor_turn)
                 minor_adjust_sat_rate = self.demand[minor_turn].saturation_rate(minor_min_green_split,
                                                                                 adjust_available_lane[minor_turn])
-                if minor_adjust_sat_rate > minor_threshold:
-                    logger.info(output_string + f'车道方案改变后,次转向{minor_turn}饱和度:{minor_adjust_sat_rate}, '
-                                                f'超过饱和度阈值{minor_threshold}, 不改变车道功能分配方案')
+                major_adjust_sat_rate = self.demand[major_turn].saturation_rate(self.green_split[major_turn],
+                                                                                adjust_available_lane[major_turn])
+                if minor_adjust_sat_rate > major_adjust_sat_rate + RECOVER_SATURATION_DIFF:
+                    print(output_string + f'车道方案改变后,次转向{minor_turn}饱和度:{minor_adjust_sat_rate}, '
+                                                f'显著大于主转向{major_turn}饱和度:{major_adjust_sat_rate}, 不改变车道功能分配方案')
                     return False
-                logger.info(output_string)
+                print(output_string)
                 vms.change_state()
                 return True
 
@@ -223,7 +222,7 @@ def get_movement_sorted_lane(lane_movement_mapping: Dict[int, Movement]) -> Dict
 
 class IntersectionController:
     def __init__(self, variance_lanes: List[VarianceLane], lane_movement_mapping: Dict[int, Movement],
-                 update_interval_sec: float):
+                 update_interval_sec: float, history_lane_movement_mapping: DayLanePlan):
         self.variance_lanes: Dict[Direction, VarianceLane] = {v_lane.direction: v_lane for v_lane in variance_lanes}
         self.lane_movement_mapping = lane_movement_mapping
         self.movement_sorted_lanes = get_movement_sorted_lane(lane_movement_mapping)
@@ -231,6 +230,8 @@ class IntersectionController:
         self.queue_data_cache = {lane_id: [] for lane_id in lane_movement_mapping.keys()}
         self.update_interval_sec = update_interval_sec
         self.last_update_time = None
+        self.history_lane_plan = history_lane_movement_mapping
+
 
     def calculate_movement_avg_flow_stat(self, movement_sorted_lanes: Dict[Movement, List[int]]):
         """从缓存中读取交通流数据并更新需求"""
@@ -296,14 +297,15 @@ class IntersectionController:
 
 class StaticIntersectionController(IntersectionController):
     def __init__(self, variance_lanes: List[VarianceLane], lane_movement_mapping: Dict[int, Movement],
-                 update_interval_sec: float, peak_lane_movement_mapping: Dict[int, Movement],
-                 peak_hour_range: Tuple[int, int]):
-        super().__init__(variance_lanes, lane_movement_mapping, update_interval_sec)
-        self.peak_lane_movement_mapping = peak_lane_movement_mapping
-        self.peak_movement_sorted_lanes = get_movement_sorted_lane(peak_lane_movement_mapping)
-        self.peak_hour_range = peak_hour_range
+                 update_interval_sec: float, history_lane_movement_mapping: DayLanePlan):
+        super().__init__(variance_lanes, lane_movement_mapping, update_interval_sec, history_lane_movement_mapping)
+        
+        # self.peak_lane_movement_mapping = peak_lane_movement_mapping
+        # self.peak_movement_sorted_lanes = get_movement_sorted_lane(peak_lane_movement_mapping)
+        # self.peak_hour_range = peak_hour_range
 
     def update_from_traffic_flow(self, tf_data: dict):
+        # Do not used
         detect_start_time = tf_data['cycle_start_time']
         if self.last_update_time is None:
             self.last_update_time = detect_start_time
@@ -331,6 +333,18 @@ class StaticIntersectionController(IntersectionController):
             self.variance_lane_change_decide()
             self.last_update_time = detect_start_time
             print(time.asctime(current_time), end='\n\n')
+    
+    def update_from_complete_data(self, flow_data: Dict[int, float], current_hour: float):
+        plan_duration = self.history_lane_plan.search_plan(current_hour)
+        movement_lane_mapping = get_movement_sorted_lane(plan_duration.movement_allocation)
+        for movement, lanes_id in movement_lane_mapping.items():
+            movement_total_flow = 0
+            for lane_id in lanes_id:
+                movement_total_flow += flow_data[lane_id]
+            self.variance_lanes[movement.direction].update_demand(movement.turn, movement_total_flow, 0)
+        
+        self.variance_lane_change_decide()
+        
 
 
 class DynamicIntersectionController(IntersectionController):
@@ -348,8 +362,7 @@ class DynamicIntersectionController(IntersectionController):
             plan_applied:
             connection: MQTT连接
         """
-        super().__init__(variance_lanes, lane_movement_mapping, update_interval_sec)
-        self.history_lane_plan = history_lane_movement_mapping
+        super().__init__(variance_lanes, lane_movement_mapping, update_interval_sec, history_lane_movement_mapping)
         self.history_lane_flow = history_lane_flow
         self.plan_applied = plan_applied  # TODO: 如果执行方案可直接影响车道功能, 将不使用预设车道方案而使用内部存储方案
         self.lane_flow_storage = LaneFlowQueueStorage(lane_movement_mapping.keys())
@@ -385,7 +398,7 @@ class DynamicIntersectionController(IntersectionController):
             queue_cache.clear()
 
     def update_from_traffic_flow(self, tf_data: dict, publish: bool = False):
-        tf_data = tf_data['statistics'][0]
+        # tf_data = tf_data['statistics'][0]
         detect_start_time = tf_data['cycle_start_time']
         if self.last_update_time is None:
             self.last_update_time = detect_start_time
