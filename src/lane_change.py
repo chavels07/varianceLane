@@ -13,8 +13,9 @@ from lib.tool import logger
 from src.connection import Connection
 from utils.data_load import HistoryLaneFlow
 
-ABSOLUTE_SATURATION_DIFF = 0.4
-RECOVER_SATURATION_DIFF = 0.5
+ABSOLUTE_SATURATION_DIFF = 0.35  # 流向饱和度不均判别阈差值
+RECOVER_SATURATION_DIFF = 0.5  # 恢复主要流向时对次要流向饱和度保护差值
+MINOR_CLEAR_SATURATION_THRESHOLD = 0.45  # 该饱和度以下认为次要方向为通畅状态，可恢复为主流向
 
 
 class VMS:
@@ -152,7 +153,7 @@ class VarianceLane:
                   major_current_saturation_rate - minor_current_saturation_rate)
             if minor_current_saturation_rate > minor_threshold or \
                     minor_current_saturation_rate - major_current_saturation_rate > ABSOLUTE_SATURATION_DIFF:
-                output_string = f'进口道{self.direction.name}转向{minor_turn}饱和度:{minor_current_saturation_rate},' \
+                output_string = f'进口道{self.direction}转向{minor_turn}饱和度:{minor_current_saturation_rate},' \
                                 f'饱和度阈值:{minor_threshold}, 车道功能变换  '
 
                 adjust_available_lane = self.lane_allocation.ensure_turn_allocation(minor_turn, major_turn)
@@ -185,21 +186,29 @@ class VarianceLane:
             print(self.direction, major_current_saturation_rate, minor_current_saturation_rate,
                   major_current_saturation_rate - minor_current_saturation_rate)
 
-            # 优先保证major流向
+            adjust_available_lane = self.lane_allocation.ensure_turn_allocation(major_turn, minor_turn)
+            minor_adjust_sat_rate = self.demand[minor_turn].saturation_rate(minor_min_green_split,
+                                                                            adjust_available_lane[minor_turn])
+            major_adjust_sat_rate = self.demand[major_turn].saturation_rate(self.green_split[major_turn],
+                                                                            adjust_available_lane[major_turn])
+            # 优先保证major流向, 判断条件符合以下之一: 1) 主流向饱和度高于阈值, 2) 主流向高于次要流向较多
             if major_current_saturation_rate > MAJOR_EXTREME_THRESHOLD or \
                     major_current_saturation_rate - minor_current_saturation_rate > ABSOLUTE_SATURATION_DIFF:
                 output_string = f'进口道{self.direction.name}主要转向{major_turn}饱和度:{major_current_saturation_rate}, ' \
                                 f'次要转向{minor_turn}饱和度:{minor_current_saturation_rate}, 车道功能变换  '
-                adjust_available_lane = self.lane_allocation.ensure_turn_allocation(major_turn, minor_turn)
-                minor_adjust_sat_rate = self.demand[minor_turn].saturation_rate(minor_min_green_split,
-                                                                                adjust_available_lane[minor_turn])
-                major_adjust_sat_rate = self.demand[major_turn].saturation_rate(self.green_split[major_turn],
-                                                                                adjust_available_lane[major_turn])
+
                 if minor_adjust_sat_rate > major_adjust_sat_rate + RECOVER_SATURATION_DIFF:
                     print(output_string + f'车道方案改变后,次转向{minor_turn}饱和度:{minor_adjust_sat_rate}, '
                                                 f'显著大于主转向{major_turn}饱和度:{major_adjust_sat_rate}, 不改变车道功能分配方案')
                     return False
                 print(output_string)
+                vms.change_state()
+                return True
+
+            # 低流量状态尝试恢复为主要流向, 切换后次要流向仍处于通畅状态
+            if minor_adjust_sat_rate <= MINOR_CLEAR_SATURATION_THRESHOLD:
+                print(f'车道方案改变后, 次转向{minor_turn}饱和度:{minor_adjust_sat_rate}, 仍处于通畅状态, 恢复为主流向状态, '
+                      '车道功能变换')
                 vms.change_state()
                 return True
 
@@ -220,6 +229,7 @@ def get_movement_sorted_lane(lane_movement_mapping: Dict[int, Movement]) -> Dict
         movement_sorted_lanes[movement].append(lane_id)
     return movement_sorted_lanes
 
+
 class IntersectionController:
     def __init__(self, variance_lanes: List[VarianceLane], lane_movement_mapping: Dict[int, Movement],
                  update_interval_sec: float, history_lane_movement_mapping: DayLanePlan):
@@ -231,7 +241,6 @@ class IntersectionController:
         self.update_interval_sec = update_interval_sec
         self.last_update_time = None
         self.history_lane_plan = history_lane_movement_mapping
-
 
     def calculate_movement_avg_flow_stat(self, movement_sorted_lanes: Dict[Movement, List[int]]):
         """从缓存中读取交通流数据并更新需求"""
@@ -305,7 +314,7 @@ class StaticIntersectionController(IntersectionController):
         # self.peak_hour_range = peak_hour_range
 
     def update_from_traffic_flow(self, tf_data: dict):
-        # Do not used
+        # Do not use this method
         detect_start_time = tf_data['cycle_start_time']
         if self.last_update_time is None:
             self.last_update_time = detect_start_time
@@ -345,7 +354,6 @@ class StaticIntersectionController(IntersectionController):
         
         self.variance_lane_change_decide()
         
-
 
 class DynamicIntersectionController(IntersectionController):
     def __init__(self, variance_lanes: List[VarianceLane], lane_movement_mapping: Dict[int, Movement],

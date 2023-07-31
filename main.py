@@ -73,7 +73,7 @@ if __name__ == '__main__':
     SAT_THRESHOLD = {
         Turn.LEFT: 0.85,
         Turn.STRAIGHT: 0.75,
-        Turn.RIGHT: 0.9,
+        Turn.RIGHT: 0.85,
         Turn.TURN: 0.75
     }
 

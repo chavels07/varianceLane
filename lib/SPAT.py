@@ -69,6 +69,9 @@ class Turn(Enum):
     TURN = ord('t')
     RIGHT_TURN = ord('t') + ord('r')
 
+    def __str__(self):
+        return self.name.lower()
+
     @property
     def basic_movement(self):
         if self is self.LEFT_STRAIGHT:
@@ -121,6 +124,9 @@ class Direction(Enum):
     SOUTH = 2
     EAST = 3
     NORTH = 4
+
+    def __str__(self):
+        return self.name
 
     @property
     def opposite_direction(self):
